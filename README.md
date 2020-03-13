@@ -1,4 +1,4 @@
-# cryto8949
+# crypto8949
 Takes a spreadsheet of cryptocurrency transactions and outputs an IRS form 8949
 
 keep up this spreadsheet up to date with all transactions. it's a bit weird but i have separate vertical sections for buys (or storj salary/bonus income), trades, transfers, and sales. i don't have a section for cryptocurrency forks (which are a taxable event!)
