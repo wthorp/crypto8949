@@ -245,7 +245,7 @@ func (h *HoldingDB) LoadCSV(r io.Reader) error {
 		return err
 	}
 
-	if !rowEqual(header2, strings.Split(",Amount,Currency,Unit basis,USD Value,,Amount,Source currency,Amount,Target currency,Unit price,Target amount after fees,,Amount,Currency,Source,Target,Fees (in addition to Amount),,,Amount,Currency,Unit price,Fees (in addition to Amount),USD Net,,URL", ",")) {
+	if !rowEqual(header2, strings.Split(",Amount,Currency,Unit basis,USD Value,,Amount,Source currency,Amount,Target currency,Source unit price,Target amount after fees,,Amount,Currency,Source,Target,Fees (in addition to Amount),,,Amount,Currency,Unit price,Fees (in addition to Amount),USD Net,,URL", ",")) {
 		return fmt.Errorf("malformed csv")
 	}
 
