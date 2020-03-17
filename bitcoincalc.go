@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/csv"
+	"flag"
 	"fmt"
 	"io"
 	"math/big"
@@ -9,6 +10,10 @@ import (
 	"sort"
 	"strings"
 	"time"
+)
+
+var (
+	flagShowBalances = flag.Bool("balances", false, "if true, show balances")
 )
 
 var (
@@ -107,10 +112,6 @@ func (h *HoldingDB) Sell(currency, amount, salePricePerUnitInUSD, saleDate, tags
 	sort.Sort(HoldingsByCurrencyAndDate{currency, h.Holdings})
 
 	remainingAmountVal := new(big.Rat).Set(&amountVal)
-	var longTermCostBasisSum, shortTermCostBasisSum big.Rat
-	var longTermAmount, shortTermAmount big.Rat
-	longTermAcquisitionDates := map[string]bool{}
-	shortTermAcquisitionDates := map[string]bool{}
 
 	for remainingAmountVal.Sign() > 0 {
 		if len(h.Holdings) <= 0 {
@@ -128,60 +129,34 @@ func (h *HoldingDB) Sell(currency, amount, salePricePerUnitInUSD, saleDate, tags
 				panic("error!")
 			}
 
-			costBasisSum := new(big.Rat).Mul(next.CostBasisPerUnitInUSD, remainingAmountVal)
-			if isLongTerm(next.AcquisitionDate, date) {
-				longTermCostBasisSum.Add(&longTermCostBasisSum, costBasisSum)
-				longTermAmount.Add(&longTermAmount, remainingAmountVal)
-				longTermAcquisitionDates[next.AcquisitionDate.Format("2006-01-02")] = true
-			} else {
-				shortTermCostBasisSum.Add(&shortTermCostBasisSum, costBasisSum)
-				shortTermAmount.Add(&shortTermAmount, remainingAmountVal)
-				shortTermAcquisitionDates[next.AcquisitionDate.Format("2006-01-02")] = true
-			}
-
-			break
+			h.TaxEvents[saleDate] = append(h.TaxEvents[saleDate], &TaxEvent{
+				Date:                         saleDate,
+				Amount:                       new(big.Rat).Set(remainingAmountVal),
+				Currency:                     currency,
+				SalePricePerUnitInUSD:        &salePrice,
+				AverageCostBasisPerUnitInUSD: next.CostBasisPerUnitInUSD,
+				LongTerm:                     isLongTerm(next.AcquisitionDate, date),
+				AcquisitionDates:             map[string]bool{next.AcquisitionDate.Format("2006-01-02"): true},
+			})
+			return
 		}
 
 		remainingAmountVal.Sub(remainingAmountVal, next.Amount)
-		costBasisSum := new(big.Rat).Mul(next.CostBasisPerUnitInUSD, next.Amount)
-		if isLongTerm(next.AcquisitionDate, date) {
-			longTermCostBasisSum.Add(&longTermCostBasisSum, costBasisSum)
-			longTermAmount.Add(&longTermAmount, next.Amount)
-			longTermAcquisitionDates[next.AcquisitionDate.Format("2006-01-02")] = true
-		} else {
-			shortTermCostBasisSum.Add(&shortTermCostBasisSum, costBasisSum)
-			shortTermAmount.Add(&shortTermAmount, next.Amount)
-			shortTermAcquisitionDates[next.AcquisitionDate.Format("2006-01-02")] = true
-		}
+		h.TaxEvents[saleDate] = append(h.TaxEvents[saleDate], &TaxEvent{
+			Date:                         saleDate,
+			Amount:                       new(big.Rat).Set(next.Amount),
+			Currency:                     currency,
+			SalePricePerUnitInUSD:        &salePrice,
+			AverageCostBasisPerUnitInUSD: next.CostBasisPerUnitInUSD,
+			LongTerm:                     isLongTerm(next.AcquisitionDate, date),
+			AcquisitionDates:             map[string]bool{next.AcquisitionDate.Format("2006-01-02"): true},
+		})
 		h.Holdings = h.Holdings[:len(h.Holdings)-1]
+
 	}
 	if remainingAmountVal.Sign() < 0 {
 		panic("error!")
 	}
-
-	if longTermAmount.Sign() > 0 {
-		h.TaxEvents[saleDate] = append(h.TaxEvents[saleDate], &TaxEvent{
-			Date:                         saleDate,
-			Amount:                       &longTermAmount,
-			Currency:                     currency,
-			SalePricePerUnitInUSD:        &salePrice,
-			AverageCostBasisPerUnitInUSD: new(big.Rat).Quo(&longTermCostBasisSum, &longTermAmount),
-			LongTerm:                     true,
-			AcquisitionDates:             longTermAcquisitionDates,
-		})
-	}
-	if shortTermAmount.Sign() > 0 {
-		h.TaxEvents[saleDate] = append(h.TaxEvents[saleDate], &TaxEvent{
-			Date:                         saleDate,
-			Amount:                       &shortTermAmount,
-			Currency:                     currency,
-			SalePricePerUnitInUSD:        &salePrice,
-			AverageCostBasisPerUnitInUSD: new(big.Rat).Quo(&shortTermCostBasisSum, &shortTermAmount),
-			LongTerm:                     false,
-			AcquisitionDates:             shortTermAcquisitionDates,
-		})
-	}
-
 }
 
 func (h *HoldingDB) Trade(currency1, currency2, amount1, amount2,
@@ -318,24 +293,25 @@ func (h *HoldingDB) LoadCSV(r io.Reader) error {
 }
 
 func main() {
-	db := NewHoldingDB()
-
-	if len(os.Args) <= 1 {
-		fmt.Printf("usage: %s <trades.csv>\n", os.Args[0])
+	flag.Parse()
+	if flag.NArg() < 1 {
+		fmt.Printf("usage: %s [options] <trades.csv>\n", os.Args[0])
 		os.Exit(1)
 	}
 
-	fh, err := os.Open(os.Args[1])
+	fh, err := os.Open(flag.Arg(0))
 	if err != nil {
 		panic(err)
 	}
+	defer fh.Close()
+
+	db := NewHoldingDB()
 	err = db.LoadCSV(fh)
 	if err != nil {
 		panic(err)
 	}
-	fh.Close()
 
-	fmt.Println("Description\tDate acquired\tDate sold\tProceeds\tCost Basis\tUnit price\tUnit basis\tGain (or loss)\tTerm\n")
+	fmt.Println("Description\tDate acquired\tDate sold\tProceeds\tCost Basis\tUnit price\tUnit basis\tGain (or loss)\tTerm")
 	for _, date := range sortedEvents(db.TaxEvents, false) {
 		byCurrency := map[string][]*TaxEvent{}
 		for _, event := range db.TaxEvents[date] {
@@ -352,33 +328,27 @@ func main() {
 			}
 
 			for _, msg := range sortedEvents(byLongTerm, false) {
-				var salesPriceSum, costBasisSum, amount big.Rat
-
-				acquisitionDates := map[string]bool{}
 				for _, event := range byLongTerm[msg] {
-					salesPriceSum.Add(&salesPriceSum,
-						new(big.Rat).Mul(event.Amount, event.SalePricePerUnitInUSD))
-					costBasisSum.Add(&costBasisSum,
-						new(big.Rat).Mul(event.Amount, event.AverageCostBasisPerUnitInUSD))
-					amount.Add(&amount, event.Amount)
-					acquisitionDates = setUnion(acquisitionDates, event.AcquisitionDates)
+					salesPrice := new(big.Rat).Mul(event.Amount, event.SalePricePerUnitInUSD)
+					costBasis := new(big.Rat).Mul(event.Amount, event.AverageCostBasisPerUnitInUSD)
+					fmt.Printf("%s %s\t%s\t%s\t$%s\t$%s\t$%s\t$%s\t$%s\t%s\n",
+						format(event.Amount), currency,
+						dateRange(setToStrings(event.AcquisitionDates)), date,
+						salesPrice.FloatString(2),
+						costBasis.FloatString(2),
+						new(big.Rat).Quo(salesPrice, event.Amount).FloatString(2),
+						new(big.Rat).Quo(costBasis, event.Amount).FloatString(2),
+						new(big.Rat).Sub(salesPrice, costBasis).FloatString(2), msg)
 				}
-
-				fmt.Printf("%s %s\t%s\t%s\t$%s\t$%s\t$%s\t$%s\t$%s\t%s\n",
-					format(&amount), currency,
-					dateRange(setToStrings(acquisitionDates)), date,
-					salesPriceSum.FloatString(2), costBasisSum.FloatString(2),
-					new(big.Rat).Quo(&salesPriceSum, &amount).FloatString(2),
-					new(big.Rat).Quo(&costBasisSum, &amount).FloatString(2),
-					new(big.Rat).Sub(&salesPriceSum, &costBasisSum).FloatString(2), msg)
 			}
 		}
-		fmt.Println()
 	}
 
-	fmt.Println("Balances:")
-	for _, currency := range sortedCurrencies(db.Balances, false) {
-		fmt.Println(" ", currency, db.Balances[currency].FloatString(2))
+	if *flagShowBalances {
+		fmt.Println("Balances:")
+		for _, currency := range sortedCurrencies(db.Balances, false) {
+			fmt.Println(" ", currency, db.Balances[currency].FloatString(2))
+		}
 	}
 }
 
